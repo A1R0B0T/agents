@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import time
 from dataclasses import dataclass
 from typing import (
@@ -394,6 +395,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             )
 
         room.on("participant_connected", self._on_participant_connected)
+        room.on("data_received", self._handle_data_message)
+
         self._room, self._participant = room, participant
 
         if participant is not None:
@@ -1233,6 +1236,51 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
         self._speech_q.append(speech_handle)
         self._speech_q_changed.set()
+
+    def _handle_data_message(self, msg: Any) -> None:
+        """
+        Handle messages from the data channel, specifically chat messages.
+
+        Args:
+            msg: The received data message
+        """
+        try:
+            # Check if the message is on the chat topic
+            if getattr(msg, "topic", None) != "lk-chat-topic":
+                return
+
+            # Decode and parse JSON data
+            try:
+                text = msg.data.decode("utf-8")
+                chat_data = json.loads(text)
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                logger.warning(f"Failed to decode/parse message data: {e}")
+                return
+
+            # Log message information
+            message_id = chat_data.get("id")
+            message_text = chat_data.get("message", "")
+            timestamp = chat_data.get("timestamp")
+
+            logger.info(
+                "received chat message",
+                extra={
+                    "message_id": message_id,
+                    "chat_text": message_text,
+                    "timestamp": timestamp,
+                },
+            )
+
+            # Only process non-empty messages
+            if message_text and message_text.strip():
+                # Consider adding a mechanism to prevent processing duplicate messages
+                # For example, you could store recently processed message_ids and skip already processed ones
+
+                self._transcribed_text = message_text
+                self._validate_reply_if_possible()
+
+        except Exception as e:
+            logger.error(f"Error handling chat message: {str(e)}", exc_info=e)
 
 
 class _DeferredReplyValidation:
